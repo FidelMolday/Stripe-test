@@ -1,10 +1,15 @@
 const mongoose = require('mongoose');
 
 const paymentSchema = new mongoose.Schema({
-  stripePaymentIntentId: {
+  pesapalMerchantReference: {
     type: String,
     required: true,
     unique: true
+  },
+  pesapalTrackingId: {
+    type: String,
+    unique: true,
+    sparse: true
   },
   amount: {
     type: Number,
@@ -12,12 +17,17 @@ const paymentSchema = new mongoose.Schema({
   },
   currency: {
     type: String,
-    default: 'usd'
+    default: 'KES'
   },
   status: {
     type: String,
-    enum: ['pending', 'succeeded', 'failed', 'canceled'],
+    enum: ['pending', 'completed', 'failed', 'canceled'],
     default: 'pending'
+  },
+  paymentMethod: {
+    type: String,
+    enum: ['mpesa', 'card', 'bank', 'other'],
+    default: 'other'
   },
   customerEmail: {
     type: String,
@@ -27,7 +37,18 @@ const paymentSchema = new mongoose.Schema({
     type: String,
     required: true
   },
+  customerPhone: {
+    type: String
+  },
   description: {
+    type: String,
+    required: true
+  },
+  callbackUrl: {
+    type: String,
+    required: true
+  },
+  cancellationUrl: {
     type: String,
     required: true
   },
@@ -39,8 +60,9 @@ const paymentSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Index for faster queries
-paymentSchema.index({ stripePaymentIntentId: 1 });
+// NEW indexes - remove old stripe indexes
+paymentSchema.index({ pesapalMerchantReference: 1 });
+paymentSchema.index({ pesapalTrackingId: 1 });
 paymentSchema.index({ customerEmail: 1 });
 paymentSchema.index({ status: 1 });
 paymentSchema.index({ createdAt: 1 });
