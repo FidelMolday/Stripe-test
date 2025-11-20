@@ -1,381 +1,278 @@
-const pesapalService = require('../utils/pesapal');
-const Payment = require('../models/Payment');
+// src/controllers/paymentController.js
+
+const pesapalService = require("../utils/pesapal");
+const Payment = require("../models/Payment");
 
 class PaymentController {
   constructor() {
-    // Bind methods to ensure 'this' context is preserved
     this.createPaymentRequest = this.createPaymentRequest.bind(this);
     this.handleCallback = this.handleCallback.bind(this);
     this.handleCancel = this.handleCancel.bind(this);
     this.handleIpn = this.handleIpn.bind(this);
     this.getPaymentStatus = this.getPaymentStatus.bind(this);
-    this.handlePesapalIPN = this.handlePesapalIPN.bind(this);
     this.testPesapalAuth = this.testPesapalAuth.bind(this);
   }
 
-  // Test Pesapal authentication
+  // --------------------------------------------------
+  // TEST PESAPAL AUTHENTICATION
+  // --------------------------------------------------
   async testPesapalAuth(req, res) {
     try {
-      console.log('🧪 Testing Pesapal authentication endpoint called...');
       const result = await pesapalService.testAuthentication();
-      
+
       res.json({
         success: result.success,
-        message: result.success ? 'Pesapal authentication successful' : 'Pesapal authentication failed',
+        message: result.success
+          ? "Pesapal authentication successful"
+          : "Pesapal authentication failed",
         environment: result.environment,
         baseUrl: result.baseUrl,
+        timestamp: new Date().toISOString(),
         error: result.error,
-        timestamp: new Date().toISOString()
       });
     } catch (error) {
-      console.error('Auth test endpoint error:', error);
       res.status(500).json({
         success: false,
         error: error.message,
-        timestamp: new Date().toISOString()
       });
     }
   }
 
-  // Generate unique merchant reference
+  // --------------------------------------------------
+  // GENERATE UNIQUE MERCHANT REFERENCE
+  // --------------------------------------------------
   generateMerchantReference() {
-    const ref = `BIPS_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    console.log('📝 Generated merchant reference:', ref);
-    return ref;
+    return `BIPS_${Date.now()}_${Math.random()
+      .toString(36)
+      .substring(2, 9)}`;
   }
 
-  // Create payment request
+  // --------------------------------------------------
+  // CREATE PAYMENT REQUEST (STEP 1)
+  // --------------------------------------------------
   async createPaymentRequest(req, res) {
     try {
-      const { amount, currency, customerEmail, customerName, customerPhone, description } = req.body;
+      const {
+        amount,
+        currency,
+        customerEmail,
+        customerName,
+        customerPhone,
+        description,
+      } = req.body;
 
-      console.log('💰 CREATE PAYMENT REQUEST STARTED:', {
-        amount, currency, customerEmail, customerName, customerPhone, description
-      });
-
-      // Validation
-      if (!amount || amount <= 0) {
-        return res.status(400).json({ error: 'Valid amount is required' });
-      }
-      if (!customerEmail || !customerName) {
-        return res.status(400).json({ error: 'Customer email and name are required' });
+      if (!amount || !customerEmail || !customerName) {
+        return res
+          .status(400)
+          .json({ error: "Amount, email and name are required" });
       }
 
       const merchantReference = this.generateMerchantReference();
-      
-      console.log('📦 Creating payment record in database...');
 
-      // Create payment record in MongoDB
-      const paymentRecord = new Payment({
+      const paymentRecord = await Payment.create({
         pesapalMerchantReference: merchantReference,
         amount,
-        currency: currency || 'KES',
-        status: 'pending',
+        currency: currency || "KES",
+        status: "pending",
         customerEmail,
         customerName,
-        customerPhone: customerPhone || '',
+        customerPhone: customerPhone || "",
         description: description || `BIPS Payment - ${amount} KES`,
-        callbackUrl: `${process.env.BASE_URL || 'http://localhost:3001'}/api/payments/callback`,
-        cancellationUrl: `${process.env.BASE_URL || 'http://localhost:3001'}/api/payments/cancel`
+        callbackUrl:
+          `${process.env.BASE_URL}/api/payments/callback` ||
+          "http://localhost:3001/api/payments/callback",
+        cancellationUrl:
+          `${process.env.BASE_URL}/api/payments/cancel` ||
+          "http://localhost:3001/api/payments/cancel",
       });
 
-      await paymentRecord.save();
-      console.log('✅ Payment record saved to database:', paymentRecord._id);
-
-      // Submit order to Pesapal
-      console.log('🔄 Submitting to Pesapal API...');
+      // Submit to Pesapal
       const pesapalResponse = await pesapalService.submitOrderRequest({
         merchantReference,
         amount,
-        currency: currency || 'KES',
-        description: description || `BIPS Payment - ${amount} KES`,
+        currency,
+        description,
         customerEmail,
         customerName,
-        customerPhone: customerPhone || '',
-        callbackUrl: `${process.env.BASE_URL || 'http://localhost:3001'}/api/payments/callback`,
-        cancellationUrl: `${process.env.BASE_URL || 'http://localhost:3001'}/api/payments/cancel`
+        customerPhone,
+        callbackUrl: paymentRecord.callbackUrl,
+        cancellationUrl: paymentRecord.cancellationUrl,
       });
 
-      console.log('✅ Pesapal API response received:', {
-        trackingId: pesapalResponse.order_tracking_id,
-        redirectUrl: pesapalResponse.redirect_url ? 'Yes' : 'No',
-        hasRedirect: !!pesapalResponse.redirect_url
-      });
-
-      // Update with tracking ID
+      // Save tracking ID
       paymentRecord.pesapalTrackingId = pesapalResponse.order_tracking_id;
       await paymentRecord.save();
-      console.log('✅ Payment record updated with tracking ID');
 
       res.status(201).json({
         success: true,
         redirectUrl: pesapalResponse.redirect_url,
         merchantReference,
         pesapalTrackingId: pesapalResponse.order_tracking_id,
-        amount,
-        currency: currency || 'KES',
-        paymentRecord: {
-          id: paymentRecord._id,
-          status: paymentRecord.status
-        }
       });
-
     } catch (error) {
-      console.error('❌ CREATE PAYMENT REQUEST FAILED:', error);
-      res.status(500).json({ 
-        error: 'Failed to create payment request',
-        details: error.message 
+      console.error("CREATE PAYMENT REQUEST ERROR:", error);
+      res.status(500).json({
+        error: "Failed to create payment request",
+        details: error.message,
       });
     }
   }
 
-  // Payment callback handler (after payment)
+  // --------------------------------------------------
+  // CALLBACK (User Returning From Pesapal)
+  // --------------------------------------------------
   async handleCallback(req, res) {
     try {
       const { OrderTrackingId, OrderMerchantReference, Status } = req.query;
 
-      console.log('🔄 Payment callback received:', {
-        OrderTrackingId,
-        OrderMerchantReference,
-        Status
-      });
-
-      // Update payment status
       if (OrderMerchantReference) {
-        const paymentRecord = await Payment.findOneAndUpdate(
+        await Payment.findOneAndUpdate(
           { pesapalMerchantReference: OrderMerchantReference },
           {
             pesapalTrackingId: OrderTrackingId,
-            status: this.mapPesapalStatus(Status)
-          },
-          { new: true }
+            status: this.mapPesapalStatus(Status),
+          }
         );
-
-        if (paymentRecord) {
-          console.log(`✅ Payment status updated: ${OrderMerchantReference} -> ${Status}`);
-        }
       }
 
-      // Redirect to frontend success page
-      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-      console.log(`🔀 Redirecting to frontend: ${frontendUrl}/payment-success`);
-      res.redirect(`${frontendUrl}/payment-success?reference=${OrderMerchantReference}`);
-
+      const frontend = process.env.FRONTEND_URL || "http://localhost:3000";
+      res.redirect(
+        `${frontend}/payment-success?reference=${OrderMerchantReference}`
+      );
     } catch (error) {
-      console.error('❌ Callback handling error:', error);
-      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-      res.redirect(`${frontendUrl}/payment-error`);
+      const frontend = process.env.FRONTEND_URL || "http://localhost:3000";
+      res.redirect(`${frontend}/payment-error`);
     }
   }
 
-  // Payment cancellation handler
+  // --------------------------------------------------
+  // PAYMENT CANCELLATION
+  // --------------------------------------------------
   async handleCancel(req, res) {
     try {
       const { OrderMerchantReference } = req.query;
 
-      console.log('❌ Payment cancellation received:', OrderMerchantReference);
-
       if (OrderMerchantReference) {
         await Payment.findOneAndUpdate(
           { pesapalMerchantReference: OrderMerchantReference },
-          { status: 'canceled' }
+          { status: "canceled" }
         );
-        console.log(`✅ Payment marked as canceled: ${OrderMerchantReference}`);
       }
 
-      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-      res.redirect(`${frontendUrl}/payment-canceled`);
-
+      const frontend = process.env.FRONTEND_URL || "http://localhost:3000";
+      res.redirect(`${frontend}/payment-canceled`);
     } catch (error) {
-      console.error('❌ Cancel handling error:', error);
-      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-      res.redirect(`${frontendUrl}/payment-error`);
+      const frontend = process.env.FRONTEND_URL || "http://localhost:3000";
+      res.redirect(`${frontend}/payment-error`);
     }
   }
 
-  // IPN (Instant Payment Notification) handler
+  // --------------------------------------------------
+  // IPN (Instant Payment Notification) – Pesapal Server to Server
+  // --------------------------------------------------
   async handleIpn(req, res) {
     try {
-      const ipnData = req.body;
-      
-      console.log('📨 IPN received:', ipnData);
+      console.log("📨 PESAPAL IPN RECEIVED:", req.body);
 
-      // For sandbox, we'll skip verification. In production, implement proper verification
-      const isValid = true; // pesapalService.verifyIpnCallback(ipnData, req.headers['signature']);
-      
-      if (!isValid) {
-        return res.status(400).json({ error: 'Invalid IPN signature' });
+      const data = req.body;
+
+      // Mandatory fields from Pesapal v3
+      const {
+        merchant_reference,
+        order_tracking_id,
+        payment_status,
+        payment_method,
+        amount,
+        currency,
+      } = data;
+
+      if (!order_tracking_id || !payment_status) {
+        console.warn("⚠️ Missing essential IPN fields");
+        return res.status(200).json({ status: "success" });
       }
 
-      // Update payment status based on IPN
-      if (ipnData.OrderMerchantReference) {
-        await Payment.findOneAndUpdate(
-          { pesapalMerchantReference: ipnData.OrderMerchantReference },
-          {
-            status: this.mapPesapalStatus(ipnData.Status),
-            paymentMethod: ipnData.PaymentMethod || 'other'
-          }
+      const updatedPayment = await Payment.findOneAndUpdate(
+        { pesapalTrackingId: order_tracking_id },
+        {
+          status: this.mapPesapalStatus(payment_status),
+          paymentMethod: payment_method,
+          ipnReceived: true,
+          ipnData: data,
+          updatedAt: new Date(),
+        },
+        { new: true }
+      );
+
+      if (updatedPayment) {
+        console.log("✅ Payment updated:", updatedPayment._id);
+      } else {
+        console.warn(
+          "⚠️ Payment not found for tracking ID:",
+          order_tracking_id
         );
-        console.log(`✅ IPN processed: ${ipnData.OrderMerchantReference} -> ${ipnData.Status}`);
       }
 
-      res.json({ status: 'OK' });
-
+      // MUST ALWAYS RETURN 200 SUCCESS
+      return res.status(200).json({
+        status: "success",
+        message: "IPN processed",
+      });
     } catch (error) {
-      console.error('❌ IPN handling error:', error);
-      res.status(500).json({ error: 'IPN processing failed' });
+      console.error("IPN ERROR:", error);
+
+      // STILL RETURN 200 SUCCESS
+      return res.status(200).json({
+        status: "success",
+        error: "Logged internally",
+      });
     }
   }
 
-  // Get payment status
+  // --------------------------------------------------
+  // GET PAYMENT STATUS
+  // --------------------------------------------------
   async getPaymentStatus(req, res) {
     try {
       const { merchantReference } = req.params;
 
-      console.log('🔍 Getting payment status for:', merchantReference);
-
-      const paymentRecord = await Payment.findOne({ 
-        pesapalMerchantReference: merchantReference 
+      const paymentRecord = await Payment.findOne({
+        pesapalMerchantReference: merchantReference,
       });
 
       if (!paymentRecord) {
-        console.log('❌ Payment not found:', merchantReference);
-        return res.status(404).json({ error: 'Payment not found' });
+        return res.status(404).json({ error: "Payment not found" });
       }
 
-      // Get latest status from Pesapal
-      const pesapalStatus = await pesapalService.getPaymentStatus(merchantReference);
-
-      console.log('✅ Payment status retrieved:', {
-        merchantReference,
-        status: paymentRecord.status,
-        pesapalStatus: pesapalStatus.status
-      });
+      const pesapalStatus = await pesapalService.getPaymentStatus(
+        paymentRecord.pesapalTrackingId
+      );
 
       res.json({
         success: true,
-        payment: {
-          id: paymentRecord._id,
-          merchantReference: paymentRecord.pesapalMerchantReference,
-          trackingId: paymentRecord.pesapalTrackingId,
-          amount: paymentRecord.amount,
-          currency: paymentRecord.currency,
-          status: paymentRecord.status,
-          paymentMethod: paymentRecord.paymentMethod,
-          customerEmail: paymentRecord.customerEmail,
-          customerName: paymentRecord.customerName,
-          description: paymentRecord.description,
-          createdAt: paymentRecord.createdAt,
-          updatedAt: paymentRecord.updatedAt
-        },
-        pesapalStatus
+        payment: paymentRecord,
+        pesapalStatus,
       });
-
     } catch (error) {
-      console.error('❌ Get payment status error:', error);
-      res.status(500).json({ 
-        error: 'Failed to get payment status',
-        details: error.message 
+      res.status(500).json({
+        error: "Failed to fetch status",
+        details: error.message,
       });
     }
   }
 
-  // Map Pesapal status to internal status
-  mapPesapalStatus(pesapalStatus) {
-    const statusMap = {
-      'Completed': 'completed',
-      'Failed': 'failed', 
-      'Invalid': 'failed',
-      'Pending': 'pending',
-      'Canceled': 'canceled'
+  // --------------------------------------------------
+  // MAP PESAPAL STATUS (v3)
+  // --------------------------------------------------
+  mapPesapalStatus(status) {
+    const map = {
+      COMPLETED: "completed",
+      FAILED: "failed",
+      INVALID: "failed",
+      PENDING: "pending",
+      CANCELLED: "canceled",
     };
-    
-    return statusMap[pesapalStatus] || 'pending';
-  }
 
-  // Handle Pesapal IPN (for the /ipn route)
-  async handlePesapalIPN(req, res) {
-    console.log('📨 Pesapal IPN Received - Headers:', req.headers);
-    console.log('🔍 Pesapal IPN Received - Body:', req.body);
-    console.log('🌐 Pesapal IPN Received - Query:', req.query);
-    console.log('⚡ Pesapal IPN Received - Method:', req.method);
-
-    try {
-      // Handle GET requests (Pesapal verification)
-      if (req.method === 'GET') {
-        console.log('✅ Pesapal IPN Verification Request');
-        return res.status(200).json({ 
-          status: 'active',
-          message: 'IPN is working correctly',
-          timestamp: new Date().toISOString()
-        });
-      }
-
-      // Handle POST requests (actual IPN notifications)
-      if (req.method === 'POST') {
-        const ipnData = req.body;
-        
-        console.log('💰 Processing Pesapal IPN:', {
-          orderTrackingId: ipnData.order_tracking_id,
-          orderNotificationType: ipnData.order_notification_type,
-          paymentStatus: ipnData.payment_status,
-          paymentMethod: ipnData.payment_method,
-          amount: ipnData.amount,
-          currency: ipnData.currency,
-          merchantReference: ipnData.merchant_reference,
-          timestamp: ipnData.timestamp
-        });
-
-        // Validate required fields
-        if (!ipnData.order_tracking_id || !ipnData.payment_status) {
-          console.warn('⚠️ Missing required fields in IPN');
-          return res.status(200).json({ status: 'success' }); // Still return success to Pesapal
-        }
-
-        // Update payment status in database      
-        const updatedPayment = await Payment.findOneAndUpdate(
-          { pesapalTrackingId: ipnData.order_tracking_id },
-          {
-            paymentStatus: ipnData.payment_status,
-            paymentMethod: ipnData.payment_method,
-            ipnReceived: true,
-            ipnData: ipnData,
-            updatedAt: new Date()
-          },
-          { new: true }
-        );
-
-        if (updatedPayment) {
-          console.log('✅ Payment updated in database:', updatedPayment._id);
-          
-          // Handle specific payment statuses
-          if (ipnData.payment_status === 'COMPLETED') {
-            console.log('🎉 Payment COMPLETED for order:', ipnData.order_tracking_id);
-            // Trigger any post-payment actions here (email notifications, etc.)
-          }
-        } else {
-          console.warn('❌ Payment not found for order:', ipnData.order_tracking_id);
-        }
-
-        // Always return success to Pesapal (important!)
-        return res.status(200).json({ 
-          status: 'success',
-          message: 'IPN processed successfully'
-        });
-      }
-
-      // Method not allowed
-      return res.status(405).json({ error: 'Method not allowed' });
-
-    } catch (error) {
-      console.error('💥 IPN Processing Error:', error);
-      
-      // Still return success to Pesapal to prevent retries for the same transaction
-      return res.status(200).json({ 
-        status: 'success',
-        message: 'IPN received (error logged)'
-      });
-    }
+    return map[status?.toUpperCase()] || "pending";
   }
 }
 

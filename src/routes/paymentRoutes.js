@@ -15,7 +15,7 @@ router.get('/callback', paymentController.handleCallback);
 router.get('/cancel', paymentController.handleCancel);
 
 // IPN handler (Instant Payment Notification)
-router.all('/ipn', paymentController.handlePesapalIPN);
+router.all('/ipn', paymentController.handleIpn);
 
 // Get payment status
 router.get('/status/:merchantReference', paymentController.getPaymentStatus);
