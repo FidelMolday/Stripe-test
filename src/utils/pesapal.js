@@ -7,11 +7,63 @@ class PesapalService {
     this.environment = "production";
     this.baseUrl = "https://pay.pesapal.com/v3";
     this.ipnId = "2a166462-698e-4fa3-8780-db119d902909";
+    
+    // Add token caching
+    this.currentToken = null;
+    this.tokenExpiry = null;
 
     console.log("=== PESAPAL CONFIG ===");
     console.log("Base URL:", this.baseUrl);
     console.log("IPN ID:", this.ipnId);
     console.log("======================");
+  }
+
+  // Get access token with caching
+  async getAccessToken() {
+    // Return cached token if still valid (Pesapal tokens typically expire in 5 minutes)
+    if (this.currentToken && this.tokenExpiry && Date.now() < this.tokenExpiry) {
+      console.log('🔑 Using cached token');
+      return this.currentToken;
+    }
+
+    try {
+      console.log('🔑 Getting new Pesapal access token...');
+      
+      const response = await axios.post(
+        `${this.baseUrl}/api/Auth/RequestToken`,
+        {
+          consumer_key: this.consumerKey,
+          consumer_secret: this.consumerSecret,
+        },
+        {
+          headers: { 
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+          },
+          timeout: 10000,
+        }
+      );
+
+      this.currentToken = response.data.token;
+      // Set token expiry to 4 minutes from now (safe margin)
+      this.tokenExpiry = Date.now() + (4 * 60 * 1000);
+      
+      console.log('✅ New token received successfully');
+      return this.currentToken;
+    } catch (error) {
+      console.error('❌ Token fetch failed:');
+      console.error('Status:', error.response?.status);
+      console.error('Error Data:', error.response?.data);
+      console.error('Error Message:', error.message);
+      throw new Error("Failed to get Pesapal token");
+    }
+  }
+
+  // Clear token cache (for testing)
+  clearTokenCache() {
+    this.currentToken = null;
+    this.tokenExpiry = null;
+    console.log('🔄 Token cache cleared');
   }
 
   // Test authentication
@@ -33,37 +85,6 @@ class PesapalService {
         environment: this.environment,
         baseUrl: this.baseUrl
       };
-    }
-  }
-
-  // Get access token
-  async getAccessToken() {
-    try {
-      console.log('🔑 Getting Pesapal access token...');
-      
-      const response = await axios.post(
-        `${this.baseUrl}/api/Auth/RequestToken`,
-        {
-          consumer_key: this.consumerKey,
-          consumer_secret: this.consumerSecret,
-        },
-        {
-          headers: { 
-            "Content-Type": "application/json",
-            "Accept": "application/json"
-          },
-          timeout: 10000,
-        }
-      );
-
-      console.log('✅ Token received successfully');
-      return response.data.token;
-    } catch (error) {
-      console.error('❌ Token fetch failed:');
-      console.error('Status:', error.response?.status);
-      console.error('Error Data:', error.response?.data);
-      console.error('Error Message:', error.message);
-      throw new Error("Failed to get Pesapal token");
     }
   }
 
@@ -120,6 +141,13 @@ class PesapalService {
       console.error('Status:', error.response?.status);
       console.error('Error Data:', error.response?.data);
       console.error('Error Message:', error.message);
+      
+      // If it's an auth error, clear the token cache
+      if (error.response?.status === 500 && error.response?.data?.error?.code === 'invalid_api_credentials_provided') {
+        console.log('🔄 Clearing token cache due to auth error');
+        this.clearTokenCache();
+      }
+      
       throw new Error(error.response?.data?.message || "Failed to submit Pesapal order");
     }
   }
