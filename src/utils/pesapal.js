@@ -61,7 +61,7 @@ class PesapalService {
         description: paymentData.description,
         callback_url: paymentData.callbackUrl,
         cancellation_url: paymentData.cancellationUrl,
-        notification_id: process.env.PESAPAL_NOTIFICATION_ID || '',
+        //notification_id: process.env.PESAPAL_NOTIFICATION_ID || '',
         billing_address: {
           email_address: paymentData.customerEmail,
           phone_number: paymentData.customerPhone || '',
