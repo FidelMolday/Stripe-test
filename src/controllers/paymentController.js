@@ -9,18 +9,49 @@ class PaymentController {
     this.handleCancel = this.handleCancel.bind(this);
     this.handleIpn = this.handleIpn.bind(this);
     this.getPaymentStatus = this.getPaymentStatus.bind(this);
-    this.handlePesapalIPN = this.handlePesapalIPN.bind(this); // ADD THIS LINE
+    this.handlePesapalIPN = this.handlePesapalIPN.bind(this);
+    this.testPesapalAuth = this.testPesapalAuth.bind(this);
+  }
+
+  // Test Pesapal authentication
+  async testPesapalAuth(req, res) {
+    try {
+      console.log('🧪 Testing Pesapal authentication endpoint called...');
+      const result = await pesapalService.testAuthentication();
+      
+      res.json({
+        success: result.success,
+        message: result.success ? 'Pesapal authentication successful' : 'Pesapal authentication failed',
+        environment: result.environment,
+        baseUrl: result.baseUrl,
+        error: result.error,
+        timestamp: new Date().toISOString()
+      });
+    } catch (error) {
+      console.error('Auth test endpoint error:', error);
+      res.status(500).json({
+        success: false,
+        error: error.message,
+        timestamp: new Date().toISOString()
+      });
+    }
   }
 
   // Generate unique merchant reference
   generateMerchantReference() {
-    return `BIPS_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const ref = `BIPS_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    console.log('📝 Generated merchant reference:', ref);
+    return ref;
   }
 
   // Create payment request
   async createPaymentRequest(req, res) {
     try {
       const { amount, currency, customerEmail, customerName, customerPhone, description } = req.body;
+
+      console.log('💰 CREATE PAYMENT REQUEST STARTED:', {
+        amount, currency, customerEmail, customerName, customerPhone, description
+      });
 
       // Validation
       if (!amount || amount <= 0) {
@@ -32,6 +63,8 @@ class PaymentController {
 
       const merchantReference = this.generateMerchantReference();
       
+      console.log('📦 Creating payment record in database...');
+
       // Create payment record in MongoDB
       const paymentRecord = new Payment({
         pesapalMerchantReference: merchantReference,
@@ -47,8 +80,10 @@ class PaymentController {
       });
 
       await paymentRecord.save();
+      console.log('✅ Payment record saved to database:', paymentRecord._id);
 
       // Submit order to Pesapal
+      console.log('🔄 Submitting to Pesapal API...');
       const pesapalResponse = await pesapalService.submitOrderRequest({
         merchantReference,
         amount,
@@ -61,9 +96,16 @@ class PaymentController {
         cancellationUrl: `${process.env.BASE_URL || 'http://localhost:3001'}/api/payments/cancel`
       });
 
+      console.log('✅ Pesapal API response received:', {
+        trackingId: pesapalResponse.order_tracking_id,
+        redirectUrl: pesapalResponse.redirect_url ? 'Yes' : 'No',
+        hasRedirect: !!pesapalResponse.redirect_url
+      });
+
       // Update with tracking ID
       paymentRecord.pesapalTrackingId = pesapalResponse.order_tracking_id;
       await paymentRecord.save();
+      console.log('✅ Payment record updated with tracking ID');
 
       res.status(201).json({
         success: true,
@@ -79,7 +121,7 @@ class PaymentController {
       });
 
     } catch (error) {
-      console.error('Create payment request error:', error);
+      console.error('❌ CREATE PAYMENT REQUEST FAILED:', error);
       res.status(500).json({ 
         error: 'Failed to create payment request',
         details: error.message 
@@ -92,7 +134,7 @@ class PaymentController {
     try {
       const { OrderTrackingId, OrderMerchantReference, Status } = req.query;
 
-      console.log('Payment callback received:', {
+      console.log('🔄 Payment callback received:', {
         OrderTrackingId,
         OrderMerchantReference,
         Status
@@ -110,16 +152,17 @@ class PaymentController {
         );
 
         if (paymentRecord) {
-          console.log(`Payment status updated: ${OrderMerchantReference} -> ${Status}`);
+          console.log(`✅ Payment status updated: ${OrderMerchantReference} -> ${Status}`);
         }
       }
 
       // Redirect to frontend success page
       const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+      console.log(`🔀 Redirecting to frontend: ${frontendUrl}/payment-success`);
       res.redirect(`${frontendUrl}/payment-success?reference=${OrderMerchantReference}`);
 
     } catch (error) {
-      console.error('Callback handling error:', error);
+      console.error('❌ Callback handling error:', error);
       const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
       res.redirect(`${frontendUrl}/payment-error`);
     }
@@ -130,18 +173,21 @@ class PaymentController {
     try {
       const { OrderMerchantReference } = req.query;
 
+      console.log('❌ Payment cancellation received:', OrderMerchantReference);
+
       if (OrderMerchantReference) {
         await Payment.findOneAndUpdate(
           { pesapalMerchantReference: OrderMerchantReference },
           { status: 'canceled' }
         );
+        console.log(`✅ Payment marked as canceled: ${OrderMerchantReference}`);
       }
 
       const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
       res.redirect(`${frontendUrl}/payment-canceled`);
 
     } catch (error) {
-      console.error('Cancel handling error:', error);
+      console.error('❌ Cancel handling error:', error);
       const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
       res.redirect(`${frontendUrl}/payment-error`);
     }
@@ -152,7 +198,7 @@ class PaymentController {
     try {
       const ipnData = req.body;
       
-      console.log('IPN received:', ipnData);
+      console.log('📨 IPN received:', ipnData);
 
       // For sandbox, we'll skip verification. In production, implement proper verification
       const isValid = true; // pesapalService.verifyIpnCallback(ipnData, req.headers['signature']);
@@ -170,12 +216,13 @@ class PaymentController {
             paymentMethod: ipnData.PaymentMethod || 'other'
           }
         );
+        console.log(`✅ IPN processed: ${ipnData.OrderMerchantReference} -> ${ipnData.Status}`);
       }
 
       res.json({ status: 'OK' });
 
     } catch (error) {
-      console.error('IPN handling error:', error);
+      console.error('❌ IPN handling error:', error);
       res.status(500).json({ error: 'IPN processing failed' });
     }
   }
@@ -185,16 +232,25 @@ class PaymentController {
     try {
       const { merchantReference } = req.params;
 
+      console.log('🔍 Getting payment status for:', merchantReference);
+
       const paymentRecord = await Payment.findOne({ 
         pesapalMerchantReference: merchantReference 
       });
 
       if (!paymentRecord) {
+        console.log('❌ Payment not found:', merchantReference);
         return res.status(404).json({ error: 'Payment not found' });
       }
 
       // Get latest status from Pesapal
       const pesapalStatus = await pesapalService.getPaymentStatus(merchantReference);
+
+      console.log('✅ Payment status retrieved:', {
+        merchantReference,
+        status: paymentRecord.status,
+        pesapalStatus: pesapalStatus.status
+      });
 
       res.json({
         success: true,
@@ -216,7 +272,7 @@ class PaymentController {
       });
 
     } catch (error) {
-      console.error('Get payment status error:', error);
+      console.error('❌ Get payment status error:', error);
       res.status(500).json({ 
         error: 'Failed to get payment status',
         details: error.message 
@@ -237,7 +293,7 @@ class PaymentController {
     return statusMap[pesapalStatus] || 'pending';
   }
 
-  // NEW: Handle Pesapal IPN (for the /ipn route)
+  // Handle Pesapal IPN (for the /ipn route)
   async handlePesapalIPN(req, res) {
     console.log('📨 Pesapal IPN Received - Headers:', req.headers);
     console.log('🔍 Pesapal IPN Received - Body:', req.body);

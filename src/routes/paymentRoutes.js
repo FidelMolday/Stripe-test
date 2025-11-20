@@ -2,6 +2,9 @@ const express = require('express');
 const router = express.Router();
 const paymentController = require('../controllers/paymentController');
 
+// Test authentication
+router.get('/test-auth', paymentController.testPesapalAuth);
+
 // Create payment request
 router.post('/create-request', paymentController.createPaymentRequest);
 
