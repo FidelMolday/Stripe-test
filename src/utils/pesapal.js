@@ -6,7 +6,7 @@ class PesapalService {
     this.consumerSecret = process.env.PESAPAL_CONSUMER_SECRET || "M6qELBp7Ic1H6BcmZD6Ewd74NgY=";
     this.environment = "production";
     this.baseUrl = "https://pay.pesapal.com/v3";
-    this.ipnId = process.env.PESAPAL_IPN_ID || "2a166462-698e-4fa3-8780-db119d902909"; // FROM ENV
+    this.ipnId = process.env.PESAPAL_IPN_ID || "baae690a-55e1-4b56-844c-db114bb6c750"; // FROM ENV
     
     this.currentToken = null;
     this.tokenExpiry = null;
