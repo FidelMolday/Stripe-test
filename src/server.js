@@ -5,6 +5,7 @@ require('dotenv').config();
 const connectDB = require('./config/database');
 const paymentRoutes = require('./routes/paymentRoutes');
 
+
 const app = express();
 
 // Remove CORS completely - allow all origins

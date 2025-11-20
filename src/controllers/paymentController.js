@@ -9,6 +9,7 @@ class PaymentController {
     this.handleCancel = this.handleCancel.bind(this);
     this.handleIpn = this.handleIpn.bind(this);
     this.getPaymentStatus = this.getPaymentStatus.bind(this);
+    this.handlePesapalIPN = this.handlePesapalIPN.bind(this); // ADD THIS LINE
   }
 
   // Generate unique merchant reference
@@ -234,6 +235,91 @@ class PaymentController {
     };
     
     return statusMap[pesapalStatus] || 'pending';
+  }
+
+  // NEW: Handle Pesapal IPN (for the /ipn route)
+  async handlePesapalIPN(req, res) {
+    console.log('📨 Pesapal IPN Received - Headers:', req.headers);
+    console.log('🔍 Pesapal IPN Received - Body:', req.body);
+    console.log('🌐 Pesapal IPN Received - Query:', req.query);
+    console.log('⚡ Pesapal IPN Received - Method:', req.method);
+
+    try {
+      // Handle GET requests (Pesapal verification)
+      if (req.method === 'GET') {
+        console.log('✅ Pesapal IPN Verification Request');
+        return res.status(200).json({ 
+          status: 'active',
+          message: 'IPN is working correctly',
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      // Handle POST requests (actual IPN notifications)
+      if (req.method === 'POST') {
+        const ipnData = req.body;
+        
+        console.log('💰 Processing Pesapal IPN:', {
+          orderTrackingId: ipnData.order_tracking_id,
+          orderNotificationType: ipnData.order_notification_type,
+          paymentStatus: ipnData.payment_status,
+          paymentMethod: ipnData.payment_method,
+          amount: ipnData.amount,
+          currency: ipnData.currency,
+          merchantReference: ipnData.merchant_reference,
+          timestamp: ipnData.timestamp
+        });
+
+        // Validate required fields
+        if (!ipnData.order_tracking_id || !ipnData.payment_status) {
+          console.warn('⚠️ Missing required fields in IPN');
+          return res.status(200).json({ status: 'success' }); // Still return success to Pesapal
+        }
+
+        // Update payment status in database      
+        const updatedPayment = await Payment.findOneAndUpdate(
+          { pesapalTrackingId: ipnData.order_tracking_id },
+          {
+            paymentStatus: ipnData.payment_status,
+            paymentMethod: ipnData.payment_method,
+            ipnReceived: true,
+            ipnData: ipnData,
+            updatedAt: new Date()
+          },
+          { new: true }
+        );
+
+        if (updatedPayment) {
+          console.log('✅ Payment updated in database:', updatedPayment._id);
+          
+          // Handle specific payment statuses
+          if (ipnData.payment_status === 'COMPLETED') {
+            console.log('🎉 Payment COMPLETED for order:', ipnData.order_tracking_id);
+            // Trigger any post-payment actions here (email notifications, etc.)
+          }
+        } else {
+          console.warn('❌ Payment not found for order:', ipnData.order_tracking_id);
+        }
+
+        // Always return success to Pesapal (important!)
+        return res.status(200).json({ 
+          status: 'success',
+          message: 'IPN processed successfully'
+        });
+      }
+
+      // Method not allowed
+      return res.status(405).json({ error: 'Method not allowed' });
+
+    } catch (error) {
+      console.error('💥 IPN Processing Error:', error);
+      
+      // Still return success to Pesapal to prevent retries for the same transaction
+      return res.status(200).json({ 
+        status: 'success',
+        message: 'IPN received (error logged)'
+      });
+    }
   }
 }
 
