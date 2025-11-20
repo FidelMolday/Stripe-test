@@ -83,6 +83,7 @@ class PesapalService {
         description: paymentData.description,
         callback_url: paymentData.callbackUrl,
         cancellation_url: paymentData.cancellationUrl,
+        notification_id: "https://stripe-test-yb9k.onrender.com/api/payments/ipn", 
         billing_address: {
           email_address: paymentData.customerEmail,
           phone_number: paymentData.customerPhone || '',
