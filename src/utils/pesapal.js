@@ -6,21 +6,20 @@ class PesapalService {
     this.consumerSecret = process.env.PESAPAL_CONSUMER_SECRET || "M6qELBp7Ic1H6BcmZD6Ewd74NgY=";
     this.environment = "production";
     this.baseUrl = "https://pay.pesapal.com/v3";
-    this.ipnId = "2a166462-698e-4fa3-8780-db119d902909";
+    this.ipnId = process.env.PESAPAL_IPN_ID || "2a166462-698e-4fa3-8780-db119d902909"; // FROM ENV
     
-    // Add token caching
     this.currentToken = null;
     this.tokenExpiry = null;
 
     console.log("=== PESAPAL CONFIG ===");
     console.log("Base URL:", this.baseUrl);
     console.log("IPN ID:", this.ipnId);
+    console.log("Using IPN from ENV:", !!process.env.PESAPAL_IPN_ID);
     console.log("======================");
   }
 
-  // Get access token with caching
+  // Get access token
   async getAccessToken() {
-    // Return cached token if still valid (Pesapal tokens typically expire in 5 minutes)
     if (this.currentToken && this.tokenExpiry && Date.now() < this.tokenExpiry) {
       console.log('🔑 Using cached token');
       return this.currentToken;
@@ -45,7 +44,6 @@ class PesapalService {
       );
 
       this.currentToken = response.data.token;
-      // Set token expiry to 4 minutes from now (safe margin)
       this.tokenExpiry = Date.now() + (4 * 60 * 1000);
       
       console.log('✅ New token received successfully');
@@ -59,14 +57,12 @@ class PesapalService {
     }
   }
 
-  // Clear token cache (for testing)
   clearTokenCache() {
     this.currentToken = null;
     this.tokenExpiry = null;
     console.log('🔄 Token cache cleared');
   }
 
-  // Test authentication
   async testAuthentication() {
     try {
       console.log('🧪 Testing Pesapal authentication...');
@@ -75,7 +71,8 @@ class PesapalService {
         success: true,
         token: token ? 'Received' : 'No token',
         environment: this.environment,
-        baseUrl: this.baseUrl
+        baseUrl: this.baseUrl,
+        ipnId: this.ipnId
       };
     } catch (error) {
       console.error('🧪 Authentication test FAILED:', error.message);
@@ -83,7 +80,8 @@ class PesapalService {
         success: false,
         error: error.message,
         environment: this.environment,
-        baseUrl: this.baseUrl
+        baseUrl: this.baseUrl,
+        ipnId: this.ipnId
       };
     }
   }
@@ -94,6 +92,11 @@ class PesapalService {
       console.log('🔄 Submitting order to Pesapal...');
       const token = await this.getAccessToken();
 
+      // Validate IPN ID
+      if (!this.ipnId) {
+        throw new Error("IPN ID is not configured. Please set PESAPAL_IPN_ID environment variable.");
+      }
+
       const orderData = {
         id: paymentData.merchantReference,
         currency: paymentData.currency || "KES",
@@ -101,7 +104,7 @@ class PesapalService {
         description: paymentData.description,
         callback_url: paymentData.callbackUrl,
         cancellation_url: paymentData.cancellationUrl,
-        notification_id: this.ipnId,
+        notification_id: this.ipnId, // Using IPN ID from env
         billing_address: {
           email_address: paymentData.customerEmail,
           phone_number: paymentData.customerPhone || "",
@@ -119,13 +122,14 @@ class PesapalService {
       };
 
       console.log('📦 Order Data:', JSON.stringify(orderData, null, 2));
+      console.log('🔑 Using IPN ID:', this.ipnId);
 
       const response = await axios.post(
         `${this.baseUrl}/api/Transactions/SubmitOrderRequest`,
         orderData,
         {
           headers: {
-            Authorization: `Bearer ${token}`,
+            "Authorization": `Bearer ${token}`,
             "Content-Type": "application/json",
             "Accept": "application/json"
           },
@@ -142,7 +146,6 @@ class PesapalService {
       console.error('Error Data:', error.response?.data);
       console.error('Error Message:', error.message);
       
-      // If it's an auth error, clear the token cache
       if (error.response?.status === 500 && error.response?.data?.error?.code === 'invalid_api_credentials_provided') {
         console.log('🔄 Clearing token cache due to auth error');
         this.clearTokenCache();
@@ -152,7 +155,6 @@ class PesapalService {
     }
   }
 
-  // Get payment status
   async getPaymentStatus(orderTrackingId) {
     try {
       console.log('🔍 Getting payment status for:', orderTrackingId);
@@ -179,7 +181,6 @@ class PesapalService {
     }
   }
 
-  // IPN verification
   verifyIpnCallback() {
     return true;
   }

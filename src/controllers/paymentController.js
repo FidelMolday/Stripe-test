@@ -22,6 +22,7 @@ class PaymentController {
         message: result.success ? "Pesapal authentication successful" : "Pesapal authentication failed",
         environment: result.environment,
         baseUrl: result.baseUrl,
+        ipnId: result.ipnId, // Add this line
         timestamp: new Date().toISOString(),
         error: result.error,
       });
